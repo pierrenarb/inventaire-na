@@ -2529,5 +2529,216 @@ updateScanStats();
 })();
 </script>
 <!-- ===== FIN PATCH 2 ===== -->
+    <!-- ===== PATCH 3 - CORRECTION DES REFERENCES DEPUIS LA LISTE v1.0 =====
+     A coller juste avant </body>, APRES le PATCH 2. ===== -->
+<script>
+(function () {
+
+    // ---------- 1) Modale de correction : référence + quantité + suppression ----------
+    function buildModal() {
+        if (document.getElementById('fixRefOverlay')) return;
+        const o = document.createElement('div');
+        o.id = 'fixRefOverlay';
+        o.style.cssText = 'position:fixed;inset:0;background:rgba(15,45,64,0.55);z-index:10000;'
+            + 'display:none;align-items:center;justify-content:center;padding:16px;';
+        o.innerHTML =
+            '<div style="background:#fff;border-radius:12px;width:100%;max-width:420px;padding:18px;'
+            + 'box-shadow:0 8px 24px rgba(0,0,0,0.25);font-family:inherit;">'
+            + '  <div style="font-size:0.95rem;font-weight:700;color:#1B4965;margin-bottom:2px;">✏️ Corriger la ligne</div>'
+            + '  <div id="fixRefOld" style="font-size:0.72rem;color:#64748B;margin-bottom:14px;"></div>'
+            + '  <div style="margin-bottom:12px;">'
+            + '    <label style="display:block;font-size:0.78rem;font-weight:600;color:#64748B;margin-bottom:4px;">Référence NA</label>'
+            + '    <input type="text" id="fixRefInput" autocomplete="off" style="width:100%;padding:10px 12px;'
+            + 'border:2px solid #E2E8F0;border-radius:8px;font-family:inherit;font-size:0.95rem;background:#F1F5F9;">'
+            + '    <div id="fixRefFound" style="font-size:0.72rem;margin-top:5px;min-height:16px;"></div>'
+            + '  </div>'
+            + '  <div style="margin-bottom:16px;">'
+            + '    <label style="display:block;font-size:0.78rem;font-weight:600;color:#64748B;margin-bottom:4px;">Quantité</label>'
+            + '    <input type="number" id="fixQtyInput" min="0" style="width:100%;padding:10px 12px;'
+            + 'border:2px solid #E2E8F0;border-radius:8px;font-family:inherit;font-size:1.1rem;font-weight:700;background:#F1F5F9;">'
+            + '  </div>'
+            + '  <div style="display:flex;gap:8px;">'
+            + '    <button id="fixSaveBtn" style="flex:2;padding:11px;border:none;border-radius:8px;background:#10B981;'
+            + 'color:#fff;font-family:inherit;font-size:0.88rem;font-weight:700;cursor:pointer;">✅ Enregistrer</button>'
+            + '    <button id="fixCancelBtn" style="flex:1;padding:11px;border:2px solid #1B4965;border-radius:8px;'
+            + 'background:transparent;color:#1B4965;font-family:inherit;font-size:0.88rem;font-weight:600;cursor:pointer;">Annuler</button>'
+            + '  </div>'
+            + '  <button id="fixDelBtn" style="width:100%;margin-top:8px;padding:9px;border:none;border-radius:8px;'
+            + 'background:#FEF2F2;color:#EF4444;font-family:inherit;font-size:0.8rem;font-weight:600;cursor:pointer;">🗑️ Supprimer cette ligne</button>'
+            + '</div>';
+        document.body.appendChild(o);
+
+        o.addEventListener('click', e => { if (e.target === o) closeModal(); });
+        document.getElementById('fixCancelBtn').onclick = closeModal;
+
+        // Aperçu de la désignation trouvée au catalogue pendant la saisie
+        document.getElementById('fixRefInput').addEventListener('input', function () {
+            const el = document.getElementById('fixRefFound');
+            const v = this.value.trim();
+            if (!v) { el.textContent = ''; return; }
+            let hit = null;
+            try { hit = catalogueLookup(v); } catch (e) {}
+            if (hit && hit.designation) {
+                el.style.color = '#10B981';
+                el.textContent = '✅ ' + hit.designation;
+            } else if (hit) {
+                el.style.color = '#10B981';
+                el.textContent = '✅ Référence connue';
+            } else {
+                el.style.color = '#F97316';
+                el.textContent = '⚠️ Inconnue au catalogue — sera enregistrée telle quelle';
+            }
+        });
+    }
+
+    function closeModal() {
+        const o = document.getElementById('fixRefOverlay');
+        if (o) o.style.display = 'none';
+    }
+
+    // ---------- 2) Remplacement de quickEdit ----------
+    window.quickEdit = function (oldRef) {
+        if (!APP.currentList || !APP.lists[APP.currentList]) return;
+        buildModal();
+
+        const counts = getCounts();
+        const catalog = getCatalog();
+        const cnt = counts[oldRef];
+        const cat = catalog[oldRef];
+        const desig = (cat && cat.designation) || (cnt && cnt.designation) || '';
+
+        document.getElementById('fixRefOld').textContent =
+            'Actuellement : ' + oldRef + (desig ? ' — ' + desig : ' — (sans désignation)')
+            + (cnt && cnt.barcode ? '  ·  code-barres ' + cnt.barcode : '');
+        document.getElementById('fixRefInput').value = oldRef;
+        document.getElementById('fixRefFound').textContent = '';
+        document.getElementById('fixQtyInput').value = cnt ? cnt.qty : 0;
+
+        document.getElementById('fixDelBtn').style.display = cnt ? 'block' : 'none';
+        document.getElementById('fixDelBtn').onclick = function () {
+            if (!confirm('Supprimer définitivement la ligne ' + oldRef + ' ?')) return;
+            delete APP.lists[APP.currentList].counts[oldRef];
+            closeModal();
+            renderListe(); updateBadges(); updateScanStats(); autoSave();
+            showToast('Ligne supprimée', 'info');
+        };
+
+        document.getElementById('fixSaveBtn').onclick = function () {
+            const newRef = document.getElementById('fixRefInput').value.trim();
+            const qty = parseInt(document.getElementById('fixQtyInput').value, 10) || 0;
+            if (!newRef) { showToast('Référence obligatoire', 'error'); return; }
+
+            const L = APP.lists[APP.currentList];
+            const old = L.counts[oldRef] || {};
+            const already = (newRef !== oldRef) ? L.counts[newRef] : null;
+            let hit = null;
+            try { hit = catalogueLookup(newRef); } catch (e) {}
+            const newDesig = (getCatalog()[newRef] && getCatalog()[newRef].designation)
+                          || (hit && hit.designation)
+                          || (already && already.designation)
+                          || old.designation || '';
+
+            // L'ancienne clé était un code-barres : on mémorise l'association
+            const wasBarcode = /^\d{8,}$/.test(String(oldRef));
+            if (newRef !== oldRef && wasBarcode) {
+                L.barcodeMap[oldRef] = newRef;
+                try { learnEanAssociation(oldRef, newRef); } catch (e) {}
+            }
+
+            let finalQty = qty;
+            if (newRef !== oldRef && L.counts[newRef]) {
+                const exist = L.counts[newRef].qty || 0;
+                if (!confirm('La référence ' + newRef + ' est déjà comptée (' + exist + ').\n\n'
+                    + 'OK = additionner les quantités (' + (exist + qty) + ')\n'
+                    + 'Annuler = remplacer par ' + qty)) {
+                    finalQty = qty;
+                } else {
+                    finalQty = exist + qty;
+                }
+            }
+
+            if (newRef !== oldRef) delete L.counts[oldRef];
+            L.counts[newRef] = {
+                reference: newRef,
+                designation: newDesig,
+                unite: (already && already.unite) || old.unite || 'UN',
+                qty: finalQty,
+                user: APP.config.user || old.user || 'Anonyme',
+                timestamp: new Date().toISOString(),
+                barcode: (newRef !== oldRef && wasBarcode)
+                    ? oldRef
+                    : ((already && already.barcode) || old.barcode || '')
+            };
+
+            closeModal();
+            renderListe(); updateBadges(); updateScanStats(); autoSave();
+            showToast(newRef + ' → ' + finalQty, 'success');
+        };
+
+        document.getElementById('fixRefOverlay').style.display = 'flex';
+        setTimeout(() => {
+            const i = document.getElementById('fixRefInput');
+            i.focus(); i.select();
+        }, 60);
+    };
+
+    // ---------- 3) Signalement visuel des lignes fautives ----------
+    function isBadRef(ref) {
+        const c = getCounts()[ref];
+        return /^\d{8,}$/.test(String(ref)) && !(c && c.designation);
+    }
+
+    function markBadRows() {
+        const box = document.getElementById('listeItems');
+        if (!box) return;
+        box.querySelectorAll('.item-card').forEach(card => {
+            if (card.dataset.badChecked === '1') return;
+            const refEl = card.querySelector('.item-ref');
+            if (!refEl) return;
+            const ref = refEl.textContent.split('|')[0].trim();
+            if (isBadRef(ref)) {
+                card.style.background = '#FEF2F2';
+                card.style.borderLeft = '4px solid #EF4444';
+                const tag = document.createElement('div');
+                tag.style.cssText = 'font-size:0.66rem;font-weight:700;color:#EF4444;margin-top:3px;';
+                tag.textContent = '⚠️ Code-barres au lieu d\'une référence — cliquez pour corriger';
+                const info = card.querySelector('.item-info');
+                if (info) info.appendChild(tag);
+            }
+            card.dataset.badChecked = '1';
+        });
+    }
+
+    const _origRenderListe = window.renderListe;
+    window.renderListe = function () {
+        const r = _origRenderListe.apply(this, arguments);
+        try { markBadRows(); } catch (e) {}
+        return r;
+    };
+
+    // ---------- 4) Même garde-fou sur l'export multi-listes ----------
+    const _origExportAll = window.exportAllLists;
+    window.exportAllLists = function () {
+        const bad = [];
+        Object.values(APP.lists).forEach(l => {
+            Object.values(l.counts || {}).forEach(c => {
+                if (/^\d{8,}$/.test(String(c.reference || '')) && !c.designation) {
+                    bad.push(l.name + ' : ' + c.reference + ' (qte ' + c.qty + ')');
+                }
+            });
+        });
+        if (bad.length > 0) {
+            alert('/!\\ ' + bad.length + ' ligne(s) comptee(s) sous un code-barres :\n\n'
+                + bad.slice(0, 8).map(s => '\u2022 ' + s).join('\n')
+                + (bad.length > 8 ? '\n... et ' + (bad.length - 8) + ' autre(s)' : '')
+                + '\n\nOnglet Liste : cliquez sur la ligne en rouge pour saisir la reference NA.');
+            return;
+        }
+        return _origExportAll();
+    };
+
+})();
+</script>
+<!-- ===== FIN PATCH 3 ===== -->
 </body>
 </html>
