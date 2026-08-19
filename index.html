@@ -2459,5 +2459,75 @@ updateScanStats();
 })();
 </script>
 <!-- ===== FIN PATCH BASE EAN ===== -->
+    <!-- ===== PATCH 2 — SAISIE MANUELLE DES RÉFÉRENCES v1.3 — à insérer juste avant </body> ===== -->
+<script>
+(function () {
+
+    // 1) Le bouton Valider lit enfin le champ "référence" saisi à la main
+    const _origShow = window.showArticleInput;
+    window.showArticleInput = function (code, article, isBarcode) {
+        _origShow(code, article, isBarcode);
+        const ref = (article && article.reference) || (isBarcode ? '' : code);
+        if (!isBarcode || ref) return;
+
+        const btn = document.getElementById('validateBtn');
+        const ri  = document.getElementById('newRefInput');
+        if (!btn || !ri) return;
+
+        btn.textContent = '🔗 Associer et compter';
+        btn.onclick = function () {
+            const nr = ri.value.trim();
+            if (!nr) {
+                showToast('Saisissez la référence NA', 'error');
+                ri.style.borderColor = 'var(--danger)';
+                ri.focus();
+                return;
+            }
+            if (APP.currentList && APP.lists[APP.currentList]) {
+                APP.lists[APP.currentList].barcodeMap[code] = nr;
+            }
+            if (/^\d{8,}$/.test(code)) learnEanAssociation(code, nr);
+            const ci = catalogueLookup(nr);
+            const cat = getCatalog();
+            showArticleInput(code, {
+                reference: nr,
+                designation: (cat[nr] && cat[nr].designation) || (ci && ci.designation) || ''
+            }, false);
+            showToast('Code-barres associé à ' + nr, 'success');
+        };
+    };
+
+    // 2) Filet de sécurité : jamais de comptage sous un code-barres
+    const _origValidate = window.validateCount;
+    window.validateCount = function (ref, code) {
+        const r = String(ref || '').trim();
+        if (!r || (/^\d{8,}$/.test(r) && !catalogueLookup(r))) {
+            showToast('Référence NA manquante', 'error');
+            const ri = document.getElementById('newRefInput');
+            if (ri) { ri.style.borderColor = 'var(--danger)'; ri.focus(); }
+            return;
+        }
+        return _origValidate(r, code);
+    };
+
+    // 3) Blocage de l'export si des codes-barres traînent en colonne Article
+    const _origExport = window.exportSageX3;
+    window.exportSageX3 = function () {
+        const bad = Object.values(getCounts())
+            .filter(c => /^\d{8,}$/.test(String(c.reference || '')) && !c.designation);
+        if (bad.length > 0) {
+            const liste = bad.slice(0, 8).map(c => '\u2022 ' + c.reference + '  (qte ' + c.qty + ')').join('\n');
+            const suite = bad.length > 8 ? '\n... et ' + (bad.length - 8) + ' autre(s)' : '';
+            alert('/!\\ ' + bad.length + ' ligne(s) comptee(s) sous un code-barres au lieu d\'une reference NA :\n\n'
+                + liste + suite
+                + '\n\nCorrigez-les dans l\'onglet Liste (clic sur la ligne) avant d\'exporter.');
+            return;
+        }
+        return _origExport();
+    };
+
+})();
+</script>
+<!-- ===== FIN PATCH 2 ===== -->
 </body>
 </html>
