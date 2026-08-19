@@ -2349,5 +2349,115 @@ updateOnlineStatus();
 // ============================================================
 updateScanStats();
 </script>
+    <!-- ===== PATCH BASE EAN v1.1 — à insérer juste avant </body> ===== -->
+<script>
+(function () {
+    const EAN_BASE_URL = 'ean_base.json';
+    let remoteBase = null;
+
+    // 1) Téléchargement immédiat (en parallèle du démarrage)
+    fetch(EAN_BASE_URL, { cache: 'no-cache' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(d => { remoteBase = d; console.log('Base EAN téléchargée :', Object.keys(d).length); })
+        .catch(e => console.warn('Base EAN indisponible :', e.message));
+
+    // 2) Fusion une fois le catalogue et les associations locales restaurés
+    function mergeRemoteBase() {
+        if (!remoteBase) { setTimeout(mergeRemoteBase, 1000); return; }
+        let added = 0;
+        Object.entries(remoteBase).forEach(([ean, ref]) => {
+            if (!ean || !ref) return;
+            if (APP.catalogue[ean]) return;            // une association apprise localement gagne
+            const r = String(ref).trim();
+            const entry = APP.catalogueByRef[r]
+                       || APP.catalogueByRef[r.padStart(6, '0')]
+                       || { ref: r, designation: '', prix: 0, paddedRef: r };
+            entry.ean = ean;
+            APP.catalogue[ean] = entry;
+            added++;
+        });
+        if (added > 0) {
+            if (typeof saveEanMapToIDB === 'function') saveEanMapToIDB();
+            if (typeof updateCatalogueUI === 'function') updateCatalogueUI();
+            console.log('Base EAN fusionnée : +' + added + ' — total ' + Object.keys(APP.catalogue).length);
+            if (typeof showToast === 'function') {
+                showToast(Object.keys(APP.catalogue).length + ' associations EAN disponibles', 'success');
+            }
+        }
+    }
+
+    // 3) Normalisation 12 / 13 / 14 chiffres (UPC-A, zéro de tête)
+    const _origLookup = window.catalogueLookup;
+    window.catalogueLookup = function (code) {
+        const direct = _origLookup(code);
+        if (direct) return direct;
+        const c = String(code || '').trim();
+        if (!/^\d+$/.test(c)) return null;
+        const variants = [];
+        if (c.length === 12) variants.push('0' + c);
+        if (c.length === 13) { variants.push('0' + c); if (c[0] === '0') variants.push(c.slice(1)); }
+        if (c.length === 14 && c[0] === '0') { variants.push(c.slice(1)); if (c[1] === '0') variants.push(c.slice(2)); }
+        for (const v of variants) {
+            if (APP.catalogue[v]) return APP.catalogue[v];
+        }
+        return null;
+    };
+
+    // 4) Export / import de la base EAN (consolidation multi-appareils)
+    window.exportEanBase = function () {
+        const map = {};
+        Object.entries(APP.catalogue).forEach(([ean, e]) => { if (e && e.ref) map[ean] = e.ref; });
+        const n = Object.keys(map).length;
+        if (n === 0) { showToast('Base EAN vide', 'error'); return; }
+        const site = (APP.config && APP.config.site) || 'NA';
+        const d = new Date().toISOString().split('T')[0];
+        downloadFile(JSON.stringify(map, null, 1), 'ean_base_' + site + '_' + d + '.json', 'application/json');
+        showToast('Base exportée : ' + n + ' associations', 'success');
+    };
+
+    window.importEanBase = function (file) {
+        const reader = new FileReader();
+        reader.onload = ev => {
+            try {
+                const data = JSON.parse(ev.target.result);
+                let added = 0;
+                Object.entries(data).forEach(([ean, ref]) => {
+                    if (!ean || !ref || APP.catalogue[ean]) return;
+                    const r = String(ref).trim();
+                    const entry = APP.catalogueByRef[r]
+                               || APP.catalogueByRef[r.padStart(6, '0')]
+                               || { ref: r, designation: '', prix: 0, paddedRef: r };
+                    entry.ean = ean;
+                    APP.catalogue[ean] = entry;
+                    added++;
+                });
+                saveEanMapToIDB();
+                updateCatalogueUI();
+                showToast('+' + added + ' associations importées', 'success');
+            } catch (e) { showToast('Fichier JSON invalide', 'error'); }
+        };
+        reader.readAsText(file);
+    };
+
+    // 5) Boutons ajoutés dans la carte Catalogue
+    document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(mergeRemoteBase, 1200);
+
+        const card = document.getElementById('catalogueCard');
+        if (!card) return;
+        const box = document.createElement('div');
+        box.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;';
+        box.innerHTML =
+            '<button class="btn btn-outline btn-sm" style="flex:1;" onclick="exportEanBase()">💾 Exporter base EAN</button>' +
+            '<button class="btn btn-outline btn-sm" style="flex:1;" onclick="document.getElementById(\'eanImportInput\').click()">📂 Importer base EAN</button>' +
+            '<input type="file" id="eanImportInput" accept=".json" style="display:none">';
+        card.appendChild(box);
+        document.getElementById('eanImportInput').addEventListener('change', e => {
+            if (e.target.files[0]) importEanBase(e.target.files[0]);
+        });
+    });
+})();
+</script>
+<!-- ===== FIN PATCH BASE EAN ===== -->
 </body>
 </html>
